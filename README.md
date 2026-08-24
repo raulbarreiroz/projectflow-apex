@@ -1,45 +1,89 @@
-# Introduction
+# ProjectFlow APEX
 
-This repository provides a `docker-compose.yml` ready-to-use Docker configuration to simplify the deployment of Oracle APEX with Oracle Database XE. For comprehensive details about extra configurations, please refer to the [Oracle APEX official documentation](https://www.oracle.com/tools/downloads/apex-downloads/) and [Oracle Database XE documentation](https://www.oracle.com/database/technologies/appdev/xe.html).
+Entorno de desarrollo para ProjectFlow basado en Oracle Database XE 21c,
+Oracle APEX 24.2, ORDS y Docker Compose.
 
-## Repository Contents
+## Estructura
 
-This repository includes:
+```text
+projectflow-apex/
+├── docker/
+│   ├── docker-compose.yml
+│   └── .env.example
+├── db/
+│   ├── schema.sql
+│   ├── procedures.sql
+│   ├── triggers.sql
+│   └── seed_data.sql
+├── apex/
+│   ├── app_export.sql
+│   └── plugins/
+├── docs/
+│   ├── arquitectura.md
+│   └── guia-arranque.md
+├── scripts/
+├── Dockerfile.apex
+└── README.md
+```
 
-- **Docker Compose File**: A `docker-compose.yml` file that configures the Oracle APEX Docker environment. Highlights of this setup include:
-  - **Persistent Data Storage**: Configures volumes for:
-    - Oracle Database data storage for preserving database contents.
-    - APEX and ORDS configuration files.
+## Requisitos
 
-    This setup ensures that your APEX applications, configurations, and database data are preserved when the container is restarted.
+- Docker Desktop con Docker Compose.
+- Al menos 4 GB de memoria disponibles para Oracle.
+- Conexión a Internet durante la construcción. La imagen descarga APEX 24.2 y
+  ORDS directamente desde Oracle.
 
-- **Dockerfile**: Specifies the custom Oracle APEX Docker image build process. This file includes the installation of Oracle APEX 24.2, Oracle REST Data Services (ORDS), and SQL Developer Web. Feel free to modify the Dockerfile to incorporate additional components as needed.
+## Configuración
 
-## Getting Started
+1. Clona el repositorio:
 
-### Quick Setup
-
-1. **Clone the Repository**:
-   Clone this repository to your local machine using the following Git command:
    ```bash
-   git clone git clone https://github.com/ramuyk/docker-apex.git
-   cd docker-apex
+   git clone https://github.com/raulbarreiroz/projectflow-apex.git
+   cd projectflow-apex
    ```
 
-2. **Build and Start Oracle APEX**:
-   Use the following command to build the Oracle APEX image and start the service:
+2. Crea la configuración local:
+
    ```bash
-   docker compose up -d --build
+   cp docker/.env.example docker/.env
    ```
 
-   Note: The first run will take approximately 6-8 minutes as it installs Oracle APEX and configures ORDS.
+   En PowerShell:
 
-3. **Access Oracle APEX**:
-   Open a web browser and navigate to `http://localhost:8081/ords/apex` to access the APEX workspace interface. The pre-configured admin credentials are:
+   ```powershell
+   Copy-Item docker/.env.example docker/.env
+   ```
 
-   - **Workspace**: INTERNAL
-   - **Username**: ADMIN
-   - **Password**: Welcome1
+3. Cambia las contraseñas de ejemplo en `docker/.env`.
 
-   Upon first login with these credentials, you may change them for security reasons through the APEX administration interface.
+## Ejecución
 
+Desde la raíz del proyecto:
+
+```bash
+docker compose --env-file docker/.env -f docker/docker-compose.yml up -d --build
+```
+
+El contenedor espera a `XEPDB1`, instala APEX cuando hace falta, prepara ORDS y
+lo mantiene en ejecución. El primer arranque puede tardar varios minutos.
+
+Para detener los contenedores sin eliminar los volúmenes:
+
+```bash
+docker compose --env-file docker/.env -f docker/docker-compose.yml down
+```
+
+Accesos:
+
+- Administración APEX: <http://localhost:8081/ords/apex_admin>
+- ORDS: <http://localhost:8081/ords/>
+- Imágenes estáticas: <http://localhost:8081/i/>
+
+Consulta la [guía de arranque](docs/guia-arranque.md) para la configuración
+inicial, reinicios y solución de problemas.
+
+## Base de datos y APEX
+
+Los artefactos SQL se mantienen en `db/` y la exportación de la aplicación en
+`apex/app_export.sql`. Consulta [la documentación de arquitectura](docs/arquitectura.md)
+para conocer el orden de ejecución y los componentes del entorno.

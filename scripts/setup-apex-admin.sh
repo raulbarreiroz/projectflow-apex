@@ -1,201 +1,110 @@
 #!/bin/bash
-#
-# APEX Admin Setup Script
-# Requires: SYS/SYSDBA privileges on the target database
-# Purpose: Install APEX, create users, configure database
-#
 
-set -e
+set -Eeuo pipefail
 
-echo "=========================================="
-echo "APEX Admin Setup (Requires DBA Privileges)"
-echo "=========================================="
+DB_HOST="${DB_HOST:-oracle-db}"
+DB_PORT="${DB_PORT:-1521}"
+DB_SERVICE="${DB_SERVICE:-XEPDB1}"
+ORACLE_PASSWORD="${ORACLE_PASSWORD:?ORACLE_PASSWORD is required}"
+APEX_ADMIN_USER="${APEX_ADMIN_USER:-ADMIN}"
+APEX_ADMIN_EMAIL="${APEX_ADMIN_EMAIL:-admin@localhost}"
+APEX_ADMIN_PASSWORD="${APEX_ADMIN_PASSWORD:?APEX_ADMIN_PASSWORD is required}"
+APEX_PUBLIC_PASSWORD="${APEX_PUBLIC_PASSWORD:?APEX_PUBLIC_PASSWORD is required}"
 
-# Wait for Oracle database to be ready
-echo "Waiting for Oracle Database to be ready..."
-while ! sqlplus -s system/oracle@oracle-db:1521/XEPDB1 <<< "SELECT 1 FROM DUAL;" > /dev/null 2>&1; do
-    echo "Database not ready, waiting 10 seconds..."
+if [[ ! "${APEX_ADMIN_USER}" =~ ^[A-Za-z0-9_]+$ ]]; then
+    echo "APEX_ADMIN_USER may contain only letters, numbers, and underscores." >&2
+    exit 1
+fi
+
+for secret_name in ORACLE_PASSWORD APEX_ADMIN_PASSWORD APEX_PUBLIC_PASSWORD; do
+    secret_value="${!secret_name}"
+    if [[ "${secret_value}" == *'"'* || "${secret_value}" == *$'\n'* ]]; then
+        echo "${secret_name} cannot contain double quotes or newlines." >&2
+        exit 1
+    fi
+done
+
+sql_escape() {
+    printf '%s' "$1" | sed "s/'/''/g"
+}
+
+ADMIN_USER_SQL="$(sql_escape "${APEX_ADMIN_USER^^}")"
+ADMIN_EMAIL_SQL="$(sql_escape "${APEX_ADMIN_EMAIL}")"
+ADMIN_PASSWORD_SQL="$(sql_escape "${APEX_ADMIN_PASSWORD}")"
+
+echo "Waiting for Oracle Database ${DB_SERVICE}..."
+until sqlplus -s /nolog >/dev/null 2>&1 <<SQL
+WHENEVER SQLERROR EXIT SQL.SQLCODE
+CONNECT sys/"${ORACLE_PASSWORD}"@${DB_HOST}:${DB_PORT}/${DB_SERVICE} AS SYSDBA
+SELECT 1 FROM DUAL;
+EXIT
+SQL
+do
     sleep 10
 done
 
-echo "Oracle Database XEPDB1 is ready!"
+echo "Oracle Database ${DB_SERVICE} is ready."
 
-# Check if APEX is already installed
-echo "Checking if Oracle APEX is installed..."
-APEX_INSTALLED=$(sqlplus -s sys/oracle@oracle-db:1521/XEPDB1 as sysdba <<EOF
+APEX_INSTALLED="$(
+    sqlplus -s /nolog <<SQL | tr -d '[:space:]'
+WHENEVER SQLERROR EXIT SQL.SQLCODE
+CONNECT sys/"${ORACLE_PASSWORD}"@${DB_HOST}:${DB_PORT}/${DB_SERVICE} AS SYSDBA
 SET PAGESIZE 0 FEEDBACK OFF VERIFY OFF HEADING OFF ECHO OFF
 SELECT COUNT(*) FROM dba_users WHERE username = 'APEX_240200';
-EXIT;
-EOF
-)
+EXIT
+SQL
+)"
 
-APEX_INSTALLED=$(echo "$APEX_INSTALLED" | tr -d '[:space:]')
-
-if [ "$APEX_INSTALLED" = "0" ]; then
-    echo "==========================================="
-    echo "Installing Oracle APEX 24.2 into database..."
-    echo "==========================================="
-
+if [[ "${APEX_INSTALLED}" == "0" ]]; then
+    echo "Installing Oracle APEX 24.2 in ${DB_SERVICE}..."
     cd /opt/apex
-
-    # Install APEX core
-    sqlplus sys/oracle@oracle-db:1521/XEPDB1 as sysdba <<EOF
+    sqlplus -s /nolog <<SQL
+WHENEVER SQLERROR EXIT SQL.SQLCODE
+CONNECT sys/"${ORACLE_PASSWORD}"@${DB_HOST}:${DB_PORT}/${DB_SERVICE} AS SYSDBA
 @apexins.sql SYSAUX SYSAUX TEMP /i/
-EXIT;
-EOF
+EXIT
+SQL
 
-    # Unlock APEX accounts and set passwords
-    echo "Configuring APEX Admin user..."
-    sqlplus sys/oracle@oracle-db:1521/XEPDB1 as sysdba <<EOF
-ALTER SESSION SET CONTAINER = XEPDB1;
-
--- Set APEX admin password
-BEGIN
-    APEX_UTIL.SET_WORKSPACE('INTERNAL');
-    APEX_UTIL.CREATE_USER(
-        p_user_name => 'ADMIN',
-        p_email_address => 'admin@localhost',
-        p_web_password => 'Welcome1',
-        p_change_password_on_first_use => 'N',
-        p_developer_privs => 'ADMIN:CREATE:DATA_LOADER:EDIT:HELP:MONITOR:SQL'
-    );
-    COMMIT;
-END;
-/
-EXIT;
-EOF
-
-    # Configure APEX instance settings
-    echo "Configuring APEX instance..."
-    sqlplus sys/oracle@oracle-db:1521/XEPDB1 as sysdba <<EOF
-ALTER SESSION SET CONTAINER = XEPDB1;
-
-BEGIN
-    APEX_INSTANCE_ADMIN.SET_PARAMETER('SMTP_HOST_ADDRESS', 'localhost');
-    APEX_INSTANCE_ADMIN.SET_PARAMETER('SMTP_HOST_PORT', 25);
-    COMMIT;
-END;
-/
-EXIT;
-EOF
-
-    echo "Oracle APEX installation completed!"
 else
-    echo "Oracle APEX is already installed, skipping installation..."
+    echo "Oracle APEX 24.2 is already installed; skipping installation."
 fi
 
-# Ensure APEX_PUBLIC_USER is unlocked (APEX installs it locked by default)
-echo "Unlocking APEX_PUBLIC_USER account..."
-sqlplus sys/oracle@oracle-db:1521/XEPDB1 as sysdba <<EOF
-ALTER USER APEX_PUBLIC_USER ACCOUNT UNLOCK;
-COMMIT;
-EXIT;
-EOF
-
-# Clean up any previous ORDS installation
-echo "Cleaning up previous ORDS installation..."
-sqlplus sys/oracle@oracle-db:1521/XEPDB1 as sysdba <<EOF
+echo "Ensuring the ${APEX_ADMIN_USER} account exists in INTERNAL..."
+sqlplus -s /nolog <<SQL
+WHENEVER SQLERROR EXIT SQL.SQLCODE
+CONNECT sys/"${ORACLE_PASSWORD}"@${DB_HOST}:${DB_PORT}/${DB_SERVICE} AS SYSDBA
 DECLARE
-  user_exists NUMBER;
-  role_exists NUMBER;
+    l_user_count PLS_INTEGER;
 BEGIN
-  -- Drop ORDS metadata schema if exists
-  SELECT COUNT(*) INTO user_exists FROM dba_users WHERE username = 'ORDS_METADATA';
-  IF user_exists > 0 THEN
-    EXECUTE IMMEDIATE 'DROP USER ORDS_METADATA CASCADE';
-  END IF;
+    SELECT COUNT(*)
+      INTO l_user_count
+      FROM APEX_WORKSPACE_APEX_USERS
+     WHERE WORKSPACE_NAME = 'INTERNAL'
+       AND USER_NAME = '${ADMIN_USER_SQL}';
 
-  -- Drop ORDS_PUBLIC_USER if exists
-  SELECT COUNT(*) INTO user_exists FROM dba_users WHERE username = 'ORDS_PUBLIC_USER';
-  IF user_exists > 0 THEN
-    EXECUTE IMMEDIATE 'DROP USER ORDS_PUBLIC_USER CASCADE';
-  END IF;
-
-  -- Drop APEX_PUBLIC_USER if exists
-  SELECT COUNT(*) INTO user_exists FROM dba_users WHERE username = 'APEX_PUBLIC_USER';
-  IF user_exists > 0 THEN
-    EXECUTE IMMEDIATE 'DROP USER APEX_PUBLIC_USER CASCADE';
-  END IF;
-
-  -- Drop APEX_LISTENER if exists
-  SELECT COUNT(*) INTO user_exists FROM dba_users WHERE username = 'APEX_LISTENER';
-  IF user_exists > 0 THEN
-    EXECUTE IMMEDIATE 'DROP USER APEX_LISTENER CASCADE';
-  END IF;
-
-  -- Drop APEX_REST_PUBLIC_USER if exists
-  SELECT COUNT(*) INTO user_exists FROM dba_users WHERE username = 'APEX_REST_PUBLIC_USER';
-  IF user_exists > 0 THEN
-    EXECUTE IMMEDIATE 'DROP USER APEX_REST_PUBLIC_USER CASCADE';
-  END IF;
-
-  -- Drop ORDS roles
-  SELECT COUNT(*) INTO role_exists FROM dba_roles WHERE role = 'ORDS_ADMINISTRATOR_ROLE';
-  IF role_exists > 0 THEN
-    EXECUTE IMMEDIATE 'DROP ROLE ORDS_ADMINISTRATOR_ROLE';
-  END IF;
-
-  SELECT COUNT(*) INTO role_exists FROM dba_roles WHERE role = 'ORDS_RUNTIME_ROLE';
-  IF role_exists > 0 THEN
-    EXECUTE IMMEDIATE 'DROP ROLE ORDS_RUNTIME_ROLE';
-  END IF;
+    IF l_user_count = 0 THEN
+        APEX_UTIL.SET_WORKSPACE('INTERNAL');
+        APEX_UTIL.CREATE_USER(
+            p_user_name                    => '${ADMIN_USER_SQL}',
+            p_email_address                => '${ADMIN_EMAIL_SQL}',
+            p_web_password                 => '${ADMIN_PASSWORD_SQL}',
+            p_change_password_on_first_use => 'N',
+            p_developer_privs              => 'ADMIN:CREATE:DATA_LOADER:EDIT:HELP:MONITOR:SQL'
+        );
+        COMMIT;
+    END IF;
 END;
 /
+EXIT
+SQL
+
+echo "Ensuring APEX_PUBLIC_USER is ready for ORDS..."
+sqlplus -s /nolog <<SQL
+WHENEVER SQLERROR EXIT SQL.SQLCODE
+CONNECT sys/"${ORACLE_PASSWORD}"@${DB_HOST}:${DB_PORT}/${DB_SERVICE} AS SYSDBA
+ALTER USER APEX_PUBLIC_USER IDENTIFIED BY "${APEX_PUBLIC_PASSWORD}" ACCOUNT UNLOCK;
 COMMIT;
-EXIT;
-EOF
+EXIT
+SQL
 
-# Grant necessary privileges to SYSTEM user for ORDS installation
-echo "Granting privileges to SYSTEM user..."
-sqlplus sys/oracle@oracle-db:1521/XEPDB1 as sysdba <<EOF
--- Grant necessary privileges to SYSTEM for ORDS installation
-GRANT CREATE USER, ALTER USER, DROP USER TO SYSTEM;
-GRANT CREATE SESSION TO SYSTEM WITH ADMIN OPTION;
-GRANT SELECT ANY DICTIONARY TO SYSTEM;
-GRANT EXECUTE ON DBMS_LOCK TO SYSTEM;
-GRANT UNLIMITED TABLESPACE TO SYSTEM;
-
--- Grant additional privileges needed for ORDS
-GRANT ALTER ANY TABLE TO SYSTEM;
-GRANT CREATE ANY TABLE TO SYSTEM;
-GRANT DROP ANY TABLE TO SYSTEM;
-GRANT CREATE ANY INDEX TO SYSTEM;
-GRANT DROP ANY INDEX TO SYSTEM;
-GRANT CREATE ANY SYNONYM TO SYSTEM;
-GRANT CREATE PUBLIC SYNONYM TO SYSTEM;
-GRANT DROP PUBLIC SYNONYM TO SYSTEM;
-GRANT CREATE ANY VIEW TO SYSTEM;
-GRANT DROP ANY VIEW TO SYSTEM;
-GRANT CREATE ANY PROCEDURE TO SYSTEM;
-GRANT DROP ANY PROCEDURE TO SYSTEM;
-GRANT CREATE ANY SEQUENCE TO SYSTEM;
-GRANT DROP ANY SEQUENCE TO SYSTEM;
-GRANT CREATE ANY TRIGGER TO SYSTEM;
-GRANT DROP ANY TRIGGER TO SYSTEM;
-
-COMMIT;
-EXIT;
-EOF
-
-# Create ORDS users
-echo "Creating ORDS database users..."
-sqlplus sys/oracle@oracle-db:1521/XEPDB1 as sysdba <<EOF
--- Create ORDS_PUBLIC_USER
-CREATE USER ORDS_PUBLIC_USER IDENTIFIED BY Welcome1 ACCOUNT UNLOCK;
-GRANT CONNECT, RESOURCE TO ORDS_PUBLIC_USER;
-GRANT UNLIMITED TABLESPACE TO ORDS_PUBLIC_USER;
-
--- Create APEX_PUBLIC_USER
-CREATE USER APEX_PUBLIC_USER IDENTIFIED BY Welcome1 ACCOUNT UNLOCK;
-GRANT CONNECT, CREATE SESSION TO APEX_PUBLIC_USER;
-GRANT EXECUTE ON SYS.OWA_UTIL TO APEX_PUBLIC_USER;
-GRANT EXECUTE ON SYS.HTP TO APEX_PUBLIC_USER;
-GRANT EXECUTE ON SYS.HTF TO APEX_PUBLIC_USER;
-
-COMMIT;
-EXIT;
-EOF
-
-echo "=========================================="
-echo "✅ Admin setup completed successfully!"
-echo "=========================================="
+echo "APEX setup completed without replacing existing schemas."

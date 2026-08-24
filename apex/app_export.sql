@@ -1,0 +1,2 @@
+-- Sustituir este archivo por la exportación SQL de la aplicación ProjectFlow
+-- generada desde Oracle APEX.
