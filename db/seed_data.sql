@@ -1,0 +1,2 @@
+-- Datos de prueba para entornos locales.
+-- No incluir datos sensibles ni información de producción.

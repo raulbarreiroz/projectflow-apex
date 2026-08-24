@@ -1,3 +1,7 @@
 #!/bin/bash
-echo "Contenedor en modo depuración. Ejecuta 'docker exec -it apex-server bash' para entrar."
-sleep 3600
+
+set -Eeuo pipefail
+
+echo "Preparing Oracle APEX and ORDS..."
+/opt/scripts/setup-apex-admin.sh
+exec /opt/scripts/start-ords.sh

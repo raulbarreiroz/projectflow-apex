@@ -1,0 +1,2 @@
+-- Definiciones de tablas, secuencias, índices y restricciones de ProjectFlow.
+-- Mantener este archivo idempotente siempre que sea posible.
