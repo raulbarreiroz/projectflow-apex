@@ -1,37 +1,55 @@
 FROM container-registry.oracle.com/os/oraclelinux:8
 
-# Install required packages
-RUN dnf update -y && dnf install -y \
-    unzip \
-    wget \
-    curl \
-    java-17-openjdk \
-    oracle-instantclient-release-23ai-el8 \
-    && dnf install -y oracle-instantclient-basic oracle-instantclient-sqlplus \
-    && dnf clean all
+# ============================================
+# 1. Instalar dependencias del sistema + JAVA 17
+# ============================================
+RUN dnf update -y && \
+    dnf install -y unzip wget java-17-openjdk-headless && \
+    dnf clean all
 
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk
-ENV PATH="/opt:$PATH"
+# ============================================
+# 2. Variables de entorno útiles
+# ============================================
+ENV ORDS_CONFIG_DIR=/opt/ords/config \
+    APEX_IMAGES=/opt/apex/images \
+    JAVA_HOME=/usr/lib/jvm/jre-17-openjdk
 
+# ============================================
+# 3. Instalar APEX
+# ============================================
 WORKDIR /opt
 
 COPY apex_24.2.zip .
 RUN unzip apex_24.2.zip && rm apex_24.2.zip
 
-# Download and install Oracle REST Data Services (ORDS) latest
-RUN wget https://download.oracle.com/otn_software/java/ords/ords-latest.zip -O ords.zip && \
-    unzip ords.zip && \
-    rm ords.zip && \
-    mkdir -p /opt/ords/config && \
-    chmod +x /opt/bin/ords
+# ============================================
+# 4. Instalar ORDS
+# ============================================
+RUN wget https://download.oracle.com/otn_software/java/ords/ords-latest.zip && \
+    unzip ords-latest.zip -d ords && \
+    rm ords-latest.zip
 
-# Create installation scripts directory
+ENV PATH="/opt/ords/bin:${PATH}"
+
+# ============================================
+# 5. Copiar scripts de entrada
+# ============================================
 RUN mkdir -p /opt/scripts
-
-# Copy installation and configuration scripts
 COPY scripts/ /opt/scripts/
-RUN chmod +x /opt/scripts/*.sh
 
+# Convertir CRLF a LF y dar permisos de ejecución
+RUN find /opt/scripts/ -name "*.sh" -exec sed -i 's/\r$//' {} \; && \
+    chmod +x /opt/scripts/*.sh
+
+# ============================================
+# 6. (Opcional) Definir volúmenes para persistencia
+#    Estos directorios conservarán sus datos aunque el contenedor se elimine
+# ============================================
+VOLUME ["/opt/ords/config", "/opt/apex/images"]
+
+# ============================================
+# 7. Puerto y punto de entrada
+# ============================================
 EXPOSE 8080
 
 ENTRYPOINT ["/opt/scripts/entrypoint.sh"]
