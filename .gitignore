@@ -1,0 +1,19 @@
+# Oracle installation archives
+apex_*.zip
+ords*.zip
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Docker and ORDS runtime data
+docker-data/
+ords-config/
+
+# Logs and editor files
+*.log
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
